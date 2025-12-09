@@ -1,0 +1,16 @@
+identify_product_task:
+  description: >
+    Use the barcode: {barcode} to search public sources and barcode databases (like Open Food Facts, GS1, retail sites).
+    Find the official product name, brand, and category. Only return verified results.
+  expected_output: >
+    A clear product name (e.g., "Coca-Cola Classic 0.33L Can"), brand, and category.
+  agent: barcode_researcher
+
+reporting_task:
+  description: >
+    Take the raw product data from the barcode lookup and format it into a clean, human-readable summary.
+    Remove any uncertainty or unverified claims.
+  expected_output: >
+    A well-structured summary including: Product Name, Brand, Category.
+  agent: reporting_analyst
+  output_file: 'product_summary.txt'

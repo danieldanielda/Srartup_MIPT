@@ -3,7 +3,6 @@
 .venv
 __pycache__/
 uv.lock
-.rag.env
 .bot.env
 .agents.env
 models/

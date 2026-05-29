@@ -176,10 +176,6 @@ def calculate_factual_accuracy_metrics(claims: List[str], reference_text: str) -
     }
 
 
-# ==============================================================================
-# 2. Embedding-based Metrics (Relevancy & Groundedness)
-# ==============================================================================
-
 def get_embeddings_api(texts: List[str]) -> np.ndarray:
     """Получает эмбеддинги через внешний API (BGE-M3) через requests."""
     if not texts:

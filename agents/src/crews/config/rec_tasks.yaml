@@ -13,10 +13,11 @@ recommendation_task:
     3. Select the top 3-5 most relevant products.
 
     4. Present the recommendations in a structured, friendly format in Russian.
+
+    ВАЖНО: Для каждой рекомендации ОБЯЗАТЕЛЬНО укажи артикул товара в формате `[article: 19000XXXXX]` сразу после названия.
+    Пример вывода:
+    🌟 Рекомендация 1: CLARINS Eau Micellaire [article: 19000279540]
+    💧 Почему подходит: ...
   expected_output: >
-    A structured list of recommended products in Russian. 
-    Format:
-    🌟 Рекомендация 1: [Название]
-    💧 Почему подходит: [Объяснение]
-    ✨ Ключевые свойства: [Свойства]
+    Список из 3-5 рекомендаций в указанном формате.
   agent: recommendation_agent

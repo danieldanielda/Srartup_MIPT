@@ -1,10 +1,11 @@
+#!/usr/bin/env python3
 """
-эталон формируется на основе знаний LLM о регуляторных базах (EWG, CIR, EU).
-
+Пересборка датасета H2 с эталоном на латинице (INCI).
+Берёт реальные составы из goldapple_dataset.json (поле ingredients — уже INCI).
+Разметка — через LLM-as-Judge (EWG/CIR/EU).
 """
 
 import json
-import os
 import re
 import time
 import random
@@ -27,19 +28,28 @@ llm_client = OpenAI(
     max_retries=3
 )
 
-INGREDIENT_CACHE_PATH = OUTPUT_DIR / "inci_judge_cache.json"
+INGREDIENT_CACHE_PATH = OUTPUT_DIR / "inci_judge_cache_inci.json"
 
-def normalize_ingredient_name(name: str) -> str:
-    """Приводит название ингредиента к каноническому виду"""
-    # Убираем скобки, приводим к нижнему регистру, убираем лишние пробелы
-    clean = re.split(r'\s*\(', name.strip())[0].strip().lower()
-    # Убираем лишние запятые и точки в конце
-    clean = clean.rstrip(',. ')
+def normalize_inci_name(name: str) -> str:
+    """
+    Приводит INCI-название к каноническому виду:
+    - нижний регистр
+    - убирает синонимы через / : "Aqua/water/eau" → "aqua"
+    - убирает скобки и их содержимое
+    - убирает лишние пробелы, %, спецсимволы
+    """
+    # Берём первую часть до / (основное INCI-имя)
+    clean = name.split('/')[0].strip().lower()
+    # Убираем скобки и их содержимое
+    clean = re.split(r'\s*\(', clean)[0].strip()
+    # Убираем проценты, лишние символы
+    clean = re.sub(r'[^a-z0-9\s\-]', '', clean)
+    # Нормализуем пробелы
+    clean = ' '.join(clean.split())
     return clean
 
 
 def load_ingredient_cache() -> Dict[str, str]:
-    """Загружает кэш разметки ингредиентов"""
     if INGREDIENT_CACHE_PATH.exists():
         with open(INGREDIENT_CACHE_PATH, 'r', encoding='utf-8') as f:
             return json.load(f)
@@ -47,30 +57,24 @@ def load_ingredient_cache() -> Dict[str, str]:
 
 
 def save_ingredient_cache(cache: Dict[str, str]):
-    """Сохраняет кэш разметки"""
     with open(INGREDIENT_CACHE_PATH, 'w', encoding='utf-8') as f:
         json.dump(cache, f, ensure_ascii=False, indent=2)
 
 
 def classify_ingredient_with_llm(ingredient_name: str, cache: Dict[str, str]) -> Optional[str]:
-    """
-    Классифицирует ингредиент через LLM-as-Judge на основе регуляторных знаний.
-    Возвращает: safe / neutral / caution / avoid / None (если ошибка)
-    """
-    normalized = normalize_ingredient_name(ingredient_name)
+    """Классифицирует ингредиент через LLM-as-Judge"""
+    normalized = normalize_inci_name(ingredient_name)
     
-    # Проверяем кэш
     if normalized in cache:
         return cache[normalized]
     
-    # Промпт для независимой классификации
     prompt = f"""Ты — эксперт-косметолог и регуляторный аналитик.
 Оцени уровень безопасности косметического ингредиента на основе баз:
 - EU Cosmetics Regulation 1223/2009 (Annex II-VI)
 - EWG Skin Deep Database
 - Cosmetic Ingredient Review (CIR)
 
-Ингредиент: "{ingredient_name}"
+Ингредиент (INCI): "{ingredient_name}"
 
 Верни ТОЛЬКО одно слово из четырёх:
 - safe: безопасен при обычном использовании
@@ -93,12 +97,10 @@ def classify_ingredient_with_llm(ingredient_name: str, cache: Dict[str, str]) ->
         
         verdict = response.choices[0].message.content.strip().lower()
         
-        # Нормализация ответа
         if verdict in ["safe", "neutral", "caution", "avoid"]:
             cache[normalized] = verdict
             return verdict
         else:
-            # Если вернул что-то другое, пробуем найти ключевое слово
             for cat in ["safe", "neutral", "caution", "avoid"]:
                 if cat in verdict:
                     cache[normalized] = cat
@@ -110,23 +112,31 @@ def classify_ingredient_with_llm(ingredient_name: str, cache: Dict[str, str]) ->
         return None
 
 
-def parse_ingredients_from_text(ingredients_text: str) -> List[str]:
-    """Парсит строку INCI-состава в список ингредиентов"""
-    if not ingredients_text:
+def parse_ingredients_from_inci_field(ingredients_field: str) -> List[str]:
+    """
+    Парсит поле ingredients из goldapple_dataset.json (формат: "Aqua/water/eau, Propanediol, ...")
+    Возвращает список чистых INCI-названий (латиница).
+    """
+    if not ingredients_field:
         return []
     
-    # Разбиваем по запятой, чистим каждый ингредиент
     ingredients = []
-    for ing in ingredients_text.split(','):
-        cleaned = ing.strip()
-        if cleaned and len(cleaned) > 2:  # Фильтруем слишком короткие
-            ingredients.append(cleaned)
+    for item in ingredients_field.split(','):
+        # Берём основное имя (до /)
+        clean = item.split('/')[0].strip()
+        # Убираем скобки и их содержимое
+        clean = re.split(r'\s*\(', clean)[0].strip()
+        # Убираем проценты, лишние символы в конце
+        clean = re.sub(r'\s*[<\(].*$', '', clean).strip()
+        
+        # Фильтруем: должно начинаться с латинской буквы и быть длиннее 2 символов
+        if clean and len(clean) > 2 and re.match(r'^[a-zA-Z]', clean):
+            ingredients.append(clean)
     
     return ingredients
 
 
 def load_goldapple_products() -> List[Dict]:
-    """Загружает реальные продукты из базы"""
     if not GOLDAPPLE_DB_PATH.exists():
         print(f"❌ Database not found: {GOLDAPPLE_DB_PATH}")
         return []
@@ -135,15 +145,10 @@ def load_goldapple_products() -> List[Dict]:
         return json.load(f)
 
 
-def rebuild_h2_dataset(num_products: int = 100, min_ingredients: int = 5, max_ingredients: int = 50):
-    """
-    Пересобирает датасет H2 с независимой LLM-разметкой.
-    Собирает ровно num_products подходящих товаров.
-    """
-    print(f"🚀 Rebuilding H2 dataset: target {num_products} products...")
-    print(f"   Criteria: {min_ingredients}-{max_ingredients} ingredients per product.")
+def rebuild_h2_inci_dataset(num_products: int = 100, min_ingredients: int = 5, max_ingredients: int = 50):
+    """Пересобирает датасет H2 с эталоном на латинице (INCI)"""
+    print(f"🚀 Rebuilding H2 dataset with INCI (Latin) ground truth...")
     
-    # Загружаем продукты и кэш
     products = load_goldapple_products()
     cache = load_ingredient_cache()
     
@@ -151,83 +156,66 @@ def rebuild_h2_dataset(num_products: int = 100, min_ingredients: int = 5, max_in
         print("❌ No products found")
         return
     
-    # Фильтруем продукты с валидным составом и article
+    # Фильтруем продукты с валидным INCI-составом (латиница)
     valid_products = [
         p for p in products 
-        if p.get('ingredients') and p.get('article')
+        if p.get('ingredients') and p.get('article') and re.search(r'[a-zA-Z]', p.get('ingredients', ''))
     ]
     
-    print(f"📦 Found {len(valid_products)} total products with ingredients in DB.")
+    print(f"📦 Found {len(valid_products)} products with INCI (Latin) ingredients")
     
-    # Перемешиваем, чтобы выборка была случайной
     random.shuffle(valid_products)
     
     dataset = []
     total_classifications = 0
-    products_scanned = 0
     
-    # Идем по списку, пока не наберем нужное количество продуктов в датасет
     for product in valid_products:
-        # Если набрали 100 — выходим
         if len(dataset) >= num_products:
             break
             
-        products_scanned += 1
         article = product['article']
         title = product.get('title', 'Unknown')
-        ingredients_text = product.get('ingredients', '')
+        ingredients_field = product.get('ingredients', '')
         
-        # Парсим состав
-        inci_list = parse_ingredients_from_text(ingredients_text)
+        # Парсим INCI-состав (латиница)
+        inci_list = parse_ingredients_from_inci_field(ingredients_field)
         
-        # Фильтруем по количеству ингредиентов
         if not (min_ingredients <= len(inci_list) <= max_ingredients):
-            continue # Пропускаем, если не подходит по длине
+            continue
         
-        # Классифицируем каждый ингредиент через LLM
         ground_truth = {}
-        # Выводим прогресс: [1/100], [2/100]...
         current_idx = len(dataset) + 1
-        print(f"[{current_idx}/{num_products}] Product: {title[:50]}... ({len(inci_list)} ingrs)")
+        print(f"[{current_idx}/{num_products}] Product: {title[:50]}... ({len(inci_list)} INCI ingredients)")
         
         for ing in inci_list:
-            normalized = normalize_ingredient_name(ing)
+            normalized = normalize_inci_name(ing)
             if normalized in ground_truth:
-                continue  # Дубликаты в составе
+                continue  # дубликаты
             
             rating = classify_ingredient_with_llm(ing, cache)
             if rating:
                 ground_truth[normalized] = rating
                 total_classifications += 1
-            else:
-                # Если не удалось классифицировать — пропускаем ингредиент
-                # print(f"   ⚠️  Skipped unclassified: {ing}")
-                pass
         
-        # Сохраняем кэш периодически (каждые 10 продуктов)
+        # Сохраняем кэш периодически
         if current_idx % 10 == 0:
             save_ingredient_cache(cache)
-            time.sleep(1)  # Rate limiting для API
+            time.sleep(1)  # rate limiting
         
-        if ground_truth:  # Добавляем только если есть хотя бы одна классификация
+        if ground_truth:
             dataset.append({
-                "product_id": article,  # Используем реальный article
+                "product_id": article,
                 "product_name": title,
-                "inci_list": inci_list,  # Оригинальный список для отправки агенту
-                "ground_truth_categories": ground_truth,  # Независимая разметка
+                "inci_list": inci_list,  # Список на латинице для отправки агенту
+                "ground_truth_categories": ground_truth,  # Ключи тоже на латинице!
                 "annotator_1": "LLM-as-Judge (EWG/CIR/EU)",
-                "source": "goldapple_real_products",
+                "source": "goldapple_real_products_inci",
                 "num_ingredients": len(ground_truth)
             })
         
-        # Небольшая пауза, чтобы не спамить API слишком часто
         time.sleep(0.2)
     
-    # Если прошли всю базу, но не набрали 100
-    if len(dataset) < num_products:
-        print(f"⚠️  Warning: Only found {len(dataset)} suitable products in the database.")
-    
-    # Сохраняем финальный кэш
+    # Финальное сохранение кэша
     save_ingredient_cache(cache)
     
     # Сохраняем датасет
@@ -236,11 +224,10 @@ def rebuild_h2_dataset(num_products: int = 100, min_ingredients: int = 5, max_in
         for record in dataset:
             f.write(json.dumps(record, ensure_ascii=False) + '\n')
     
-    # Статистика
     print(f"\n✅ Saved {len(dataset)} products to {output_path}")
     print(f"📊 Total ingredient classifications: {total_classifications}")
     
-    # Распределение классов
+    # Статистика по классам
     if dataset:
         class_counts = {"safe": 0, "neutral": 0, "caution": 0, "avoid": 0}
         for record in dataset:
@@ -255,12 +242,12 @@ def rebuild_h2_dataset(num_products: int = 100, min_ingredients: int = 5, max_in
     # Пример записи
     if dataset:
         sample = dataset[0]
-        print(f"\n📋 Sample entry:")
+        print(f"\n📋 Sample entry (INCI/Latin):")
         print(f"   Product: {sample['product_name']}")
         print(f"   Article: {sample['product_id']}")
-        print(f"   Ingredients: {sample['inci_list'][:5]}...")
+        print(f"   INCI list: {sample['inci_list'][:5]}...")
         print(f"   Ground Truth (first 5): {dict(list(sample['ground_truth_categories'].items())[:5])}")
 
 
 if __name__ == "__main__":
-    rebuild_h2_dataset(num_products=100, min_ingredients=5, max_ingredients=50)
+    rebuild_h2_inci_dataset(num_products=100, min_ingredients=5, max_ingredients=50)

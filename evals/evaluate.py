@@ -34,6 +34,109 @@ DATASET_H2_PATH = PROJECT_ROOT / "evals" / "eval_dataset_inci.jsonl"
 
 AGENTS_API_URL = "http://195.209.219.147:8490/api/v1"
 
+# Словарь маппинга русских названий → INCI/латиница (для совместимости с inci.json)
+RU_TO_INCI_MAP = {
+    "вода": "aqua",
+    "вода питьевая": "aqua",
+    "глицерин": "glycerin",
+    "лауриновая кислота": "lauric acid",
+    "лаурил гидроксисултаин": "lauryl hydroxysultaine",
+    "гидроксид калия": "potassium hydroxide",
+    "экстракт киви": "actinidia chinensis fruit extract",
+    "экстракт грейпфрута": "citrus grandis fruit extract",
+    "экстракт листьев камелии китайской": "camellia sinensis leaf extract",
+    "экстракт яблока": "pyrus malus fruit extract",
+    "peg-40 гидрогенизированное касторовое масло": "peg-40 hydrogenated castor oil",
+    "peg-15 глицерил изостеарат": "peg-15 glyceryl isostearate",
+    "кокамид метил меа": "cocamide mea",
+    "кокоамфоацетат натрия": "sodium cocoamphoacetate",
+    "миристиновая кислота": "myristic acid",
+    "яблочная кислота": "malic acid",
+    "гидрогенизированный полиизобутен": "hydrogenated polyisobutene",
+    "молочная кислота": "lactic acid",
+    "тетранатрий edta": "tetrasodium edta",
+    "феноксиэтанол": "phenoxyethanol",
+    "ароматизатор": "parfum",
+    "бутиленгликоль": "butylene glycol",
+    "бетаин": "betaine",
+    "метилпарабен": "methylparaben",
+    "этилпарабен": "ethylparaben",
+    "натрия цитрат": "sodium citrate",
+    "ксантановая камедь": "xanthan gum",
+    "дикалия глицирризат": "dipotassium glycyrrhizate",
+    "лимонная кислота": "citric acid",
+    "аскорбил глюкозид": "ascorbyl glucoside",
+    "гидролизованная гиалуроновая кислота": "hydrolyzed hyaluronic acid",
+    "натрия гиалуронат": "sodium hyaluronate",
+    "поликватерниум-61": "polyquaternium-61",
+    "экстракт шлемника байкальского": "scutellaria baicalensis root extract",
+    "водорастворимый коллаген": "soluble collagen",
+    "изопропилмиристат": "isopropyl myristate",
+    "масло кокосовое": "cocos nucifera oil",
+    "эмульсионный воск": "emulsifying wax",
+    "масло касторовое гидрогенизированное": "hydrogenated castor oil",
+    "полиакрилат натрия/акрилоилдиметилтаурат натрия сополимер": "sodium acryloyldimethyltaurate/sodium acrylate crosspolymer",
+    "концентрат коллоидного серебра": "colloidal silver",
+    "токоферилацетат": "tocopheryl acetate",
+    "ретинолпальмитат": "retinyl palmitate",
+    "витамин f": "linoleic acid",
+    "витамин d-пантенол": "panthenol",
+    "метилизотиазолинон": "methylisothiazolinone",
+    "метилхлоризотиазолинон": "methylchloroisothiazolinone",
+    "пропилпарабен": "propylparaben",
+    "парфюмерная композиция": "parfum",
+    "кокамидопропил бетаин": "cocamidopropyl betaine",
+    "sodium lauryl sarcosinate": "sodium lauroyl sarcosinate",  # уже латиница, но с пробелами
+    "coco glucoside": "coco-glucoside",
+    "peg-90 glyceryl isostearate": "peg-90 glyceryl isostearate",
+    "laureth-2": "laureth-2",
+    "potassium sorbate": "potassium sorbate",
+    "sodium benzoate": "sodium benzoate",
+    "sodium chloride": "sodium chloride",
+    "urea": "urea",
+    "panthenol": "panthenol",
+    "arctium lappa root extract": "arctium lappa root extract",
+    "chamomilla recutita": "chamomilla recutita flower extract",
+    "hippophae rhamnoides": "hippophae rhamnoides fruit extract",
+    "urtica dioica leaf extract": "urtica dioica leaf extract",
+    "epilobium angustifolium leaf extract": "epilobium angustifolium extract",
+    "allantoin": "allantoin",
+    "niacinamide": "niacinamide",
+    "lactic acid": "lactic acid",
+    "ethylhexylglycerin": "ethylhexylglycerin",
+}
+
+def normalize_ingredient_key(key: str) -> str:
+    """
+    Приводит ключ к каноническому виду для сравнения.
+    1. Прямой маппинг рус→лат (приоритет).
+    2. Если латиница: убирает всё, кроме букв, цифр и пробелов, приводит к lower.
+    3. Если кириллица: транслитерирует (fallback).
+    """
+    key_clean = key.strip().lower()
+    
+    # 1. Прямой маппинг (самый точный)
+    if key_clean in RU_TO_INCI_MAP:
+        return RU_TO_INCI_MAP[key_clean]
+    
+    # 2. Если уже латиница (основной случай для нового датасета)
+    if not any(ord(c) > 127 for c in key_clean):
+        # Убираем спецсимволы, скобки, проценты, но оставляем пробелы и дефисы
+        clean = re.sub(r'[^a-z0-9\s\-]', '', key_clean)
+        # Убираем лишние пробелы
+        clean = ' '.join(clean.split())
+        return clean
+    
+    # 3. Если кириллица (fallback для старых данных)
+    translit_map = str.maketrans({
+        'а': 'a', 'б': 'b', 'в': 'v', 'г': 'g', 'д': 'd', 'е': 'e', 'ё': 'e',
+        'ж': 'zh', 'з': 'z', 'и': 'i', 'й': 'y', 'к': 'k', 'л': 'l', 'м': 'm',
+        'н': 'n', 'о': 'o', 'п': 'p', 'р': 'r', 'с': 's', 'т': 't', 'у': 'u',
+        'ф': 'f', 'х': 'h', 'ц': 'ts', 'ч': 'ch', 'ш': 'sh', 'щ': 'sch',
+        'ъ': '', 'ы': 'y', 'ь': '', 'э': 'e', 'ю': 'yu', 'я': 'ya',
+    })
+    return key_clean.translate(translit_map)
+
 def set_seed(seed: int = 42):
     """Фиксация seed для воспроизводимости (хотя API детерминизм зависит от бэкенда)"""
     random.seed(seed)
@@ -482,36 +585,46 @@ def run_h2(limit: int = None, seed: int = 42):
     mean_recall = np.mean(recalls) if recalls else 0.0
     print(f"\n✅ MEAN RECALL: {mean_recall:.4f} (Target: >= 0.8)")
     
-    # Save
     save_results("H2", {"mean_recall": mean_recall, "details": results_log})
     
 
 def calculate_mean_recall(predictions: Dict[str, str], ground_truth: Dict[str, str]) -> float:
     """
     Macro-Averaged Recall для 4 классов: safe, neutral, caution, avoid.
-    Формула: (1/4) * Σ (TP_c / (TP_c + FN_c))
+    С нормализацией ключей (рус→лат) для совместимости с агентом.
     """
     if not ground_truth:
         return 0.0
+    
+    normalized_predictions = {}
+    for ing, rating in predictions.items():
+        norm_key = normalize_ingredient_key(ing)
+        normalized_predictions[norm_key] = rating
     
     categories = ["safe", "neutral", "caution", "avoid"]
     category_recalls = []
     
     for cat in categories:
-        # True Positives: агент верно предсказал категорию
-        tp = sum(1 for ing, true_cat in ground_truth.items() 
-                if true_cat == cat and predictions.get(ing) == cat)
+        tp = 0
+        fn = 0
         
-        # False Negatives: в эталоне категория есть, но агент её не нашёл (или назвал иначе)
-        fn = sum(1 for ing, true_cat in ground_truth.items() 
-                if true_cat == cat and predictions.get(ing) != cat)
+        for ing, true_cat in ground_truth.items():
+            if true_cat != cat:
+                continue 
+            
+            norm_key = normalize_ingredient_key(ing)
+            
+            pred_cat = normalized_predictions.get(norm_key)
+            
+            if pred_cat == cat:
+                tp += 1
+            else:
+                fn += 1
         
-        # Recall для одной категории
         denominator = tp + fn
         if denominator > 0:
             category_recalls.append(tp / denominator)
     
-    # Возвращаем среднее по категориям
     return np.mean(category_recalls) if category_recalls else 0.0
 
 
